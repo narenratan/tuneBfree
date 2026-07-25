@@ -1100,7 +1100,11 @@ static const clap_plugin_t pluginClass = {
         plugin->sampleRate = sampleRate;
 
         plugin->synth = allocTonegen();
-        double targetRatio[9] = {0.5, 1.5, 1, 2, 3, 4, 5, 6, 8};
+        double targetRatio[NOF_DRAWBARS];
+        for (int i = 0; i < NOF_DRAWBARS; i++)
+        {
+            targetRatio[i] = getRatio(plugin->parameters, i);
+        }
         initToneGenerator(plugin->synth, nullptr, sampleRate, targetRatio);
         init_vibrato(&(plugin->synth->inst_vibrato), sampleRate);
         plugin->whirl = allocWhirl();
@@ -1111,8 +1115,17 @@ static const clap_plugin_t pluginClass = {
         plugin->reverb = allocReverb();
         initReverb(plugin->reverb, nullptr, sampleRate);
         plugin->client = MTS_RegisterClient();
-        double previousFrequency[128];
-        double previousRatio[NOF_DRAWBARS];
+
+        // Apply current parameter values to newly created DSP objects
+        for (uint32_t i = 0; i < P_COUNT; i++)
+        {
+            setParam(plugin, i, plugin->parameters[i]);
+        }
+
+        for (int i = 0; i < NOF_DRAWBARS; i++)
+        {
+            plugin->previousRatio[i] = targetRatio[i];
+        }
         return true;
     },
 
