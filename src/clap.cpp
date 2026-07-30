@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <math.h>
 #include <string>
+#include <functional>
 
 #include "clap/clap.h"
 #include "readerwriterqueue.h"
@@ -80,6 +81,12 @@ struct ParamMsg
 static moodycamel::ReaderWriterQueue<ParamMsg, 4096> toAudioQ(128);
 static moodycamel::ReaderWriterQueue<ParamMsg, 4096> fromAudioQ(128);
 
+#ifdef CLAP_GUI
+// Updates a GUI control to reflect a host-driven (e.g. MIDI-learned) parameter
+// change. Indexed by parameter id, populated in GUISetup while the editor is open.
+static std::function<void(double)> guiUpdaters[P_COUNT];
+#endif
+
 struct MyPlugin
 {
     clap_plugin_t plugin;
@@ -102,6 +109,8 @@ struct MyPlugin
 #ifdef CLAP_GUI
     struct GUI *gui;
     const clap_host_posix_fd_support_t *hostPOSIXFDSupport;
+    const clap_host_timer_support_t *hostTimerSupport;
+    clap_id timerId;
 #endif
 };
 
@@ -621,64 +630,72 @@ constexpr auto bblue = ce::colors::light_blue.opacity(0.1);
 
 auto vibrato_controls(double *mainParameters)
 {
-    auto onOff = ce::toggle_button("On/off", 1.0, bred);
-    onOff.value(mainParameters[P_VIBRATO]);
-    onOff.on_click = [mainParameters](bool down) {
+    auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
+    onOff->value(mainParameters[P_VIBRATO]);
+    onOff->on_click = [mainParameters](bool down) {
         mainParameters[P_VIBRATO] = (float)down;
         toAudioQ.try_enqueue({P_VIBRATO, (double)down});
     };
+    guiUpdaters[P_VIBRATO] = [onOff](double v) { onOff->value((bool)v); };
 
-    auto type = ce::dial(ce::basic_knob<50>());
+    auto type = ce::share(ce::dial(ce::basic_knob<50>()));
     float scale = 5.99f;
-    type.value(mainParameters[P_VIBRATO_TYPE] / scale);
-    type.on_change = [mainParameters, scale](double val) {
+    type->value(mainParameters[P_VIBRATO_TYPE] / scale);
+    type->on_change = [mainParameters, scale](double val) {
         double v = scale * val;
         mainParameters[P_VIBRATO_TYPE] = v;
         toAudioQ.try_enqueue({P_VIBRATO_TYPE, v});
     };
+    guiUpdaters[P_VIBRATO_TYPE] = [type, scale](double v) { type->value(v / scale); };
 
-    return ce::pane("Vibrato", ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, onOff)),
-                                         ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, type),
-                                                                    ce::label{"Type"}))));
+    return ce::pane("Vibrato",
+                    ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, ce::hold(onOff))),
+                              ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(type)),
+                                                         ce::label{"Type"}))));
 }
 
 auto percussion_controls(double *mainParameters)
 {
-    auto onOff = ce::toggle_button("On/off", 1.0, bred);
-    onOff.value(mainParameters[P_PERCUSSION]);
-    onOff.on_click = [mainParameters](bool down) {
+    auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
+    onOff->value(mainParameters[P_PERCUSSION]);
+    onOff->on_click = [mainParameters](bool down) {
         mainParameters[P_PERCUSSION] = float(down);
         toAudioQ.try_enqueue({P_PERCUSSION, (double)down});
     };
+    guiUpdaters[P_PERCUSSION] = [onOff](double v) { onOff->value((bool)v); };
 
-    auto volume = ce::toggle_button("Volume", 1.0, bblue);
-    volume.value(mainParameters[P_PERCUSSION_VOLUME]);
-    volume.on_click = [mainParameters](bool down) {
+    auto volume = ce::share(ce::toggle_button("Volume", 1.0, bblue));
+    volume->value(mainParameters[P_PERCUSSION_VOLUME]);
+    volume->on_click = [mainParameters](bool down) {
         mainParameters[P_PERCUSSION_VOLUME] = (float)down;
         toAudioQ.try_enqueue({P_PERCUSSION_VOLUME, (double)down});
     };
+    guiUpdaters[P_PERCUSSION_VOLUME] = [volume](double v) { volume->value((bool)v); };
 
-    auto decay = ce::toggle_button("Decay", 1.0, bblue);
-    decay.value(mainParameters[P_PERCUSSION_DECAY]);
-    decay.on_click = [mainParameters](bool down) {
+    auto decay = ce::share(ce::toggle_button("Decay", 1.0, bblue));
+    decay->value(mainParameters[P_PERCUSSION_DECAY]);
+    decay->on_click = [mainParameters](bool down) {
         mainParameters[P_PERCUSSION_DECAY] = (float)down;
         toAudioQ.try_enqueue({P_PERCUSSION_DECAY, (double)down});
     };
+    guiUpdaters[P_PERCUSSION_DECAY] = [decay](double v) { decay->value((bool)v); };
 
-    auto harmonic = ce::toggle_button("Harmonic", 1.0, bblue);
-    harmonic.value(mainParameters[P_PERCUSSION_HARMONIC]);
-    harmonic.on_click = [mainParameters](bool down) {
+    auto harmonic = ce::share(ce::toggle_button("Harmonic", 1.0, bblue));
+    harmonic->value(mainParameters[P_PERCUSSION_HARMONIC]);
+    harmonic->on_click = [mainParameters](bool down) {
         mainParameters[P_PERCUSSION_HARMONIC] = (float)down;
         toAudioQ.try_enqueue({P_PERCUSSION_HARMONIC, (double)down});
     };
+    guiUpdaters[P_PERCUSSION_HARMONIC] = [harmonic](double v) { harmonic->value((bool)v); };
 
     float m = 2.0;
     return ce::pane(
         "Percussion",
-        ce::vtile(ce::htile(ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, onOff)),
-                            ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, volume))),
-                  ce::htile(ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, decay)),
-                            ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, harmonic)))));
+        ce::vtile(
+            ce::htile(ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, ce::hold(onOff))),
+                      ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, ce::hold(volume)))),
+            ce::htile(ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, ce::hold(decay))),
+                      ce::margin({m, m, m, m}, ce::fixed_size({100, 50}, ce::hold(harmonic))))));
 }
 
 double check(double x)
@@ -725,138 +742,117 @@ auto drawbar_controls(double *mainParameters)
 {
     auto track = ce::basic_track<5, true>();
     auto marks = ce::slider_marks_lin<40, 8>(track);
-
-    auto slider0 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider1 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider2 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider3 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider4 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider5 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider6 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider7 = ce::slider(ce::basic_thumb<25>(), marks);
-    auto slider8 = ce::slider(ce::basic_thumb<25>(), marks);
     float scale = 8.0f;
-    slider0.value(mainParameters[0] / scale);
-    slider0.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[0] = v;
-        toAudioQ.try_enqueue({0, v});
+
+    auto makeSlider = [&](uint32_t i) {
+        auto s = ce::share(ce::slider(ce::basic_thumb<25>(), marks));
+        s->value(mainParameters[i] / scale);
+        s->on_change = [mainParameters, scale, i](double val) {
+            double v = scale * val;
+            mainParameters[i] = v;
+            toAudioQ.try_enqueue({i, v});
+        };
+        guiUpdaters[i] = [s, scale](double v) { s->value(v / scale); };
+        return s;
     };
-    slider1.value(mainParameters[1] / scale);
-    slider1.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[1] = v;
-        toAudioQ.try_enqueue({1, v});
-    };
-    slider2.value(mainParameters[2] / scale);
-    slider2.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[2] = v;
-        toAudioQ.try_enqueue({2, v});
-    };
-    slider3.value(mainParameters[3] / scale);
-    slider3.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[3] = v;
-        toAudioQ.try_enqueue({3, v});
-    };
-    slider4.value(mainParameters[4] / scale);
-    slider4.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[4] = v;
-        toAudioQ.try_enqueue({4, v});
-    };
-    slider5.value(mainParameters[5] / scale);
-    slider5.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[5] = v;
-        toAudioQ.try_enqueue({5, v});
-    };
-    slider6.value(mainParameters[6] / scale);
-    slider6.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[6] = v;
-        toAudioQ.try_enqueue({6, v});
-    };
-    slider7.value(mainParameters[7] / scale);
-    slider7.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[7] = v;
-        toAudioQ.try_enqueue({7, v});
-    };
-    slider8.value(mainParameters[8] / scale);
-    slider8.on_change = [mainParameters, scale](double val) {
-        double v = scale * val;
-        mainParameters[8] = v;
-        toAudioQ.try_enqueue({8, v});
-    };
+    auto slider0 = makeSlider(0);
+    auto slider1 = makeSlider(1);
+    auto slider2 = makeSlider(2);
+    auto slider3 = makeSlider(3);
+    auto slider4 = makeSlider(4);
+    auto slider5 = makeSlider(5);
+    auto slider6 = makeSlider(6);
+    auto slider7 = makeSlider(7);
+    auto slider8 = makeSlider(8);
     float m = 5.0;
+
+    auto setRatioUpdater = [mainParameters](uint32_t i, auto box) {
+        auto updater = [box, mainParameters, i](double) {
+            box->set_text(ratioString(mainParameters, i));
+        };
+        guiUpdaters[P_RATIO_TOP_MIN + i] = updater;
+        guiUpdaters[P_RATIO_BOTTOM_MIN + i] = updater;
+    };
 
     auto ratio0 = ce::input_box(ratioString(mainParameters, 0));
     ratio0.second->on_text = ON_TEXT(0);
+    setRatioUpdater(0, ratio0.second);
     auto ratio1 = ce::input_box(ratioString(mainParameters, 1));
     ratio1.second->on_text = ON_TEXT(1);
+    setRatioUpdater(1, ratio1.second);
     auto ratio2 = ce::input_box(ratioString(mainParameters, 2));
     ratio2.second->on_text = ON_TEXT(2);
+    setRatioUpdater(2, ratio2.second);
     auto ratio3 = ce::input_box(ratioString(mainParameters, 3));
     ratio3.second->on_text = ON_TEXT(3);
+    setRatioUpdater(3, ratio3.second);
     auto ratio4 = ce::input_box(ratioString(mainParameters, 4));
     ratio4.second->on_text = ON_TEXT(4);
+    setRatioUpdater(4, ratio4.second);
     auto ratio5 = ce::input_box(ratioString(mainParameters, 5));
     ratio5.second->on_text = ON_TEXT(5);
+    setRatioUpdater(5, ratio5.second);
     auto ratio6 = ce::input_box(ratioString(mainParameters, 6));
     ratio6.second->on_text = ON_TEXT(6);
+    setRatioUpdater(6, ratio6.second);
     auto ratio7 = ce::input_box(ratioString(mainParameters, 7));
     ratio7.second->on_text = ON_TEXT(7);
+    setRatioUpdater(7, ratio7.second);
     auto ratio8 = ce::input_box(ratioString(mainParameters, 8));
     ratio8.second->on_text = ON_TEXT(8);
+    setRatioUpdater(8, ratio8.second);
 
     return ce::pane(
         "Drawbars",
-        ce::margin({10, 10, 10, 10}, ce::htile(ce::hmargin(m, ce::vtile(slider0, ratio0.first)),
-                                               ce::hmargin(m, ce::vtile(slider1, ratio1.first)),
-                                               ce::hmargin(m, ce::vtile(slider2, ratio2.first)),
-                                               ce::hmargin(m, ce::vtile(slider3, ratio3.first)),
-                                               ce::hmargin(m, ce::vtile(slider4, ratio4.first)),
-                                               ce::hmargin(m, ce::vtile(slider5, ratio5.first)),
-                                               ce::hmargin(m, ce::vtile(slider6, ratio6.first)),
-                                               ce::hmargin(m, ce::vtile(slider7, ratio7.first)),
-                                               ce::hmargin(m, ce::vtile(slider8, ratio8.first)))));
+        ce::margin(
+            {10, 10, 10, 10},
+            ce::htile(ce::hmargin(m, ce::vtile(ce::hold(slider0), ratio0.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider1), ratio1.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider2), ratio2.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider3), ratio3.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider4), ratio4.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider5), ratio5.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider6), ratio6.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider7), ratio7.first)),
+                      ce::hmargin(m, ce::vtile(ce::hold(slider8), ratio8.first)))));
 }
 
 auto overdrive_controls(double *mainParameters)
 {
-    auto onOff = ce::toggle_button("On/off", 1.0, bred);
-    onOff.value(mainParameters[P_OVERDRIVE]);
-    onOff.on_click = [mainParameters](bool down) {
+    auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
+    onOff->value(mainParameters[P_OVERDRIVE]);
+    onOff->on_click = [mainParameters](bool down) {
         mainParameters[P_OVERDRIVE] = float(down);
         toAudioQ.try_enqueue({P_OVERDRIVE, (double)down});
     };
+    guiUpdaters[P_OVERDRIVE] = [onOff](double v) { onOff->value((bool)v); };
 
     // auto character = ce::dial(ce::radial_marks<20>(ce::basic_knob<25>()));
-    auto character = ce::dial(ce::basic_knob<50>());
-    character.value(mainParameters[P_CHARACTER]);
-    character.on_change = [mainParameters](double val) {
+    auto character = ce::share(ce::dial(ce::basic_knob<50>()));
+    character->value(mainParameters[P_CHARACTER]);
+    character->on_change = [mainParameters](double val) {
         mainParameters[P_CHARACTER] = val;
         toAudioQ.try_enqueue({P_CHARACTER, val});
     };
+    guiUpdaters[P_CHARACTER] = [character](double v) { character->value(v); };
 
     return ce::pane("Overdrive",
-                    ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, onOff)),
-                              ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, character),
+                    ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, ce::hold(onOff))),
+                              ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(character)),
                                                          ce::label{"Character"}))));
 }
 
 auto reverb_controls(double *mainParameters)
 {
-    auto wetDry = ce::dial(ce::basic_knob<50>());
-    wetDry.value(mainParameters[P_REVERB]);
-    wetDry.on_change = [mainParameters](double val) {
+    auto wetDry = ce::share(ce::dial(ce::basic_knob<50>()));
+    wetDry->value(mainParameters[P_REVERB]);
+    wetDry->on_change = [mainParameters](double val) {
         mainParameters[P_REVERB] = val;
         toAudioQ.try_enqueue({P_REVERB, val});
     };
+    guiUpdaters[P_REVERB] = [wetDry](double v) { wetDry->value(v); };
     return ce::pane("Reverb", ce::align_center(ce::margin(
-                                  {5, 5, 5, 5}, ce::vtile(ce::margin({5, 5, 5, 5}, wetDry),
+                                  {5, 5, 5, 5}, ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(wetDry)),
                                                           ce::label{"Wet/dry"}))));
 }
 
@@ -864,27 +860,30 @@ auto leslie_controls(double *mainParameters)
 {
     float scale = 2.99f;
 
-    auto drum = ce::dial(ce::basic_knob<50>());
-    drum.value(mainParameters[P_DRUM] / scale);
-    drum.on_change = [scale, mainParameters](double val) {
+    auto drum = ce::share(ce::dial(ce::basic_knob<50>()));
+    drum->value(mainParameters[P_DRUM] / scale);
+    drum->on_change = [scale, mainParameters](double val) {
         double v = scale * val;
         mainParameters[P_DRUM] = v;
         toAudioQ.try_enqueue({P_DRUM, v});
     };
+    guiUpdaters[P_DRUM] = [drum, scale](double v) { drum->value(v / scale); };
 
-    auto horn = ce::dial(ce::basic_knob<50>());
-    horn.value(mainParameters[P_HORN] / scale);
-    horn.on_change = [scale, mainParameters](double val) {
+    auto horn = ce::share(ce::dial(ce::basic_knob<50>()));
+    horn->value(mainParameters[P_HORN] / scale);
+    horn->on_change = [scale, mainParameters](double val) {
         double v = scale * val;
         mainParameters[P_HORN] = v;
         toAudioQ.try_enqueue({P_HORN, v});
     };
+    guiUpdaters[P_HORN] = [horn, scale](double v) { horn->value(v / scale); };
 
     return ce::pane(
         "Leslie",
         ce::align_center(ce::htile(
-            ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, drum), ce::label{"Drum"})),
-            ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, horn), ce::label{"Horn"})))));
+            ce::align_center(ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(drum)), ce::label{"Drum"})),
+            ce::align_center(
+                ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(horn)), ce::label{"Horn"})))));
 }
 
 void GUISetup(MyPlugin *plugin)
@@ -940,6 +939,13 @@ static const clap_plugin_gui_t extensionGUI = {
         MyPlugin *plugin = (MyPlugin *)_plugin->plugin_data;
         GUICreate(plugin);
         GUISetup(plugin);
+        plugin->hostTimerSupport =
+            (const clap_host_timer_support_t *)plugin->host->get_extension(
+                plugin->host, CLAP_EXT_TIMER_SUPPORT);
+        if (plugin->hostTimerSupport && plugin->hostTimerSupport->register_timer)
+        {
+            plugin->hostTimerSupport->register_timer(plugin->host, 30, &plugin->timerId);
+        }
         return true;
     },
 
@@ -948,7 +954,17 @@ static const clap_plugin_gui_t extensionGUI = {
 #ifdef DEBUG_PRINT
             fprintf(stderr, "extensionGUI.destroy\n");
 #endif
-            GUIDestroy((MyPlugin *)_plugin->plugin_data);
+            MyPlugin *plugin = (MyPlugin *)_plugin->plugin_data;
+            if (plugin->hostTimerSupport && plugin->hostTimerSupport->unregister_timer)
+            {
+                plugin->hostTimerSupport->unregister_timer(plugin->host, plugin->timerId);
+            }
+            plugin->hostTimerSupport = nullptr;
+            for (uint32_t i = 0; i < P_COUNT; i++)
+            {
+                guiUpdaters[i] = nullptr;
+            }
+            GUIDestroy(plugin);
         },
 
     .set_scale = [](const clap_plugin_t *plugin, double scale) -> bool {
@@ -1043,6 +1059,32 @@ static const clap_plugin_posix_fd_support_t extensionPOSIXFDSupport = {
 #endif
             MyPlugin *plugin = (MyPlugin *)_plugin->plugin_data;
             GUIOnPOSIXFD(plugin);
+        },
+};
+
+// Periodic [main-thread] callback used to pull host-driven parameter changes
+// (automation, MIDI learn, host UI) from the audio thread into the open editor
+// so the GUI controls reflect the current values.
+static const clap_plugin_timer_support_t extensionTimerSupport = {
+    .on_timer =
+        [](const clap_plugin_t *_plugin, clap_id timerId) {
+            MyPlugin *plugin = (MyPlugin *)_plugin->plugin_data;
+            if (!plugin->gui || !plugin->gui->view)
+                return;
+            struct ParamMsg p;
+            bool anyChanged = false;
+            while (fromAudioQ.try_dequeue(p))
+            {
+                if (p.paramIndex < P_COUNT)
+                {
+                    plugin->mainParameters[p.paramIndex] = p.value;
+                    if (guiUpdaters[p.paramIndex])
+                        guiUpdaters[p.paramIndex](p.value);
+                    anyChanged = true;
+                }
+            }
+            if (anyChanged)
+                plugin->gui->view->refresh();
         },
 };
 #endif // CLAP_GUI
@@ -1243,6 +1285,8 @@ static const clap_plugin_t pluginClass = {
             return &extensionGUI;
         if (0 == strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
             return &extensionPOSIXFDSupport;
+        if (0 == strcmp(id, CLAP_EXT_TIMER_SUPPORT))
+            return &extensionTimerSupport;
 #endif
         if (0 == strcmp(id, CLAP_EXT_STATE))
             return &extensionState;
