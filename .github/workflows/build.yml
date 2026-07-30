@@ -42,9 +42,7 @@ jobs:
             sudo cp ~/MTS-ESP/libMTS/Linux/x86_64/libMTS.so /usr/local/lib/
             python3 -m venv .env
             source .env/bin/activate
-            git clone --recurse-submodules https://github.com/narenratan/mtsespy.git ~/mtsespy
-            python3 -m pip install ~/mtsespy
-            python3 -m pip install pytest
+            python3 -m pip install pytest mtsespy tuning-library
             pytest -k 'not regression' tests
       - uses: actions/upload-artifact@v4
         with:
@@ -94,9 +92,7 @@ jobs:
             sudo cp ~/MTS-ESP/libMTS/Mac/x86_64_ARM/libMTS.dylib "/Library/Application Support/MTS-ESP/libMTS.dylib"
             python3 -m venv .env
             source .env/bin/activate
-            git clone --recurse-submodules https://github.com/narenratan/mtsespy.git ~/mtsespy
-            python3 -m pip install ~/mtsespy
-            python3 -m pip install pytest
+            python3 -m pip install pytest mtsespy tuning-library
             pytest -k 'not regression' tests
       - uses: actions/upload-artifact@v4
         with:
@@ -207,9 +203,7 @@ jobs:
             sudo cp ~/MTS-ESP/libMTS/Linux/x86_64/libMTS.so /usr/local/lib/
             python3 -m venv .env
             source .env/bin/activate
-            git clone --recurse-submodules https://github.com/narenratan/mtsespy.git ~/mtsespy
-            python3 -m pip install ~/mtsespy
-            python3 -m pip install pytest
+            python3 -m pip install pytest mtsespy tuning-library
             pytest -k 'not regression' tests
   regression_tests:
     runs-on: ubuntu-20.04
@@ -232,7 +226,5 @@ jobs:
             sudo cp ~/MTS-ESP/libMTS/Linux/x86_64/libMTS.so /usr/local/lib/
             python3 -m venv .env
             source .env/bin/activate
-            git clone --recurse-submodules https://github.com/narenratan/mtsespy.git ~/mtsespy
-            python3 -m pip install ~/mtsespy
-            python3 -m pip install pytest
+            python3 -m pip install pytest mtsespy tuning-library
             pytest tests/test_regression.py

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import mtsespy as mts
-from mtsespy import scala_files_to_frequencies
+from tuning_library import scala_files_to_frequencies
 
 REPO_DIR = Path(__file__).parents[1]
 

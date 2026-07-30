@@ -48,4 +48,8 @@ DWARF
 /doc/html
 /site
 
+/build
 /src/build
+
+__pycache__
+.venv
