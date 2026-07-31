@@ -53,7 +53,7 @@ namespace ce = cycfi::elements;
 #define GUI_HEIGHT (650)
 
 #define ON_TEXT(i)                                                                                 \
-    [mainParameters](std::string_view text) -> bool {                                              \
+    [plugin](std::string_view text) -> bool {                                                      \
         double top = 1.0, bottom = 1.0;                                                            \
         try                                                                                        \
         {                                                                                          \
@@ -65,10 +65,10 @@ namespace ce = cycfi::elements;
         }                                                                                          \
         uint32_t top_index = P_RATIO_TOP_MIN + i;                                                  \
         uint32_t bottom_index = P_RATIO_BOTTOM_MIN + i;                                            \
-        mainParameters[top_index] = top;                                                           \
-        toAudioQ.try_enqueue({top_index, top});                                                    \
-        mainParameters[bottom_index] = bottom;                                                     \
-        toAudioQ.try_enqueue({bottom_index, bottom});                                              \
+        plugin->mainParameters[top_index] = top;                                                   \
+        plugin->toAudioQ.try_enqueue({top_index, top});                                            \
+        plugin->mainParameters[bottom_index] = bottom;                                             \
+        plugin->toAudioQ.try_enqueue({bottom_index, bottom});                                      \
         return true;                                                                               \
     }
 
@@ -78,21 +78,14 @@ struct ParamMsg
     double value;
 };
 
-static moodycamel::ReaderWriterQueue<ParamMsg, 4096> toAudioQ(128);
-static moodycamel::ReaderWriterQueue<ParamMsg, 4096> fromAudioQ(128);
-
-#ifdef CLAP_GUI
-// Updates a GUI control to reflect a host-driven (e.g. MIDI-learned) parameter
-// change. Indexed by parameter id, populated in GUISetup while the editor is open.
-static std::function<void(double)> guiUpdaters[P_COUNT];
-#endif
-
 struct MyPlugin
 {
     clap_plugin_t plugin;
     const clap_host_t *host;
     float sampleRate;
     double parameters[P_COUNT], mainParameters[P_COUNT];
+    moodycamel::ReaderWriterQueue<ParamMsg, 4096> toAudioQ{128};
+    moodycamel::ReaderWriterQueue<ParamMsg, 4096> fromAudioQ{128};
     struct b_tonegen *synth;
     struct b_preamp *preamp;
     struct b_reverb *reverb;
@@ -111,6 +104,9 @@ struct MyPlugin
     const clap_host_posix_fd_support_t *hostPOSIXFDSupport;
     const clap_host_timer_support_t *hostTimerSupport;
     clap_id timerId;
+    // Updates a GUI control to reflect a host-driven (e.g. MIDI-learned) parameter
+    // change. Indexed by parameter id, populated in GUISetup while the editor is open.
+    std::function<void(double)> guiUpdaters[P_COUNT];
 #endif
 };
 
@@ -240,7 +236,7 @@ static void PluginProcessEvent(MyPlugin *plugin, const clap_event_header_t *even
 
             plugin->parameters[index] = valueEvent->value;
             struct ParamMsg p = {index, valueEvent->value};
-            fromAudioQ.try_enqueue(p);
+            plugin->fromAudioQ.try_enqueue(p);
 #ifdef DEBUG_PRINT
             fprintf(stderr, "PluginProcessEvent fromAudioQ.try_enqueue: %d %f\n", p.paramIndex,
                     p.value);
@@ -287,7 +283,7 @@ static void PluginRenderAudio(MyPlugin *plugin, uint32_t start, uint32_t end, fl
 static void PluginSyncMainToAudio(MyPlugin *plugin, const clap_output_events_t *out)
 {
     struct ParamMsg p;
-    while (toAudioQ.try_dequeue(p))
+    while (plugin->toAudioQ.try_dequeue(p))
     {
 #ifdef DEBUG_PRINT
         fprintf(stderr, "PluginSyncMainToAudio toAudioQ.try_dequeue: %d %f\n", p.paramIndex,
@@ -318,7 +314,7 @@ static bool PluginSyncAudioToMain(MyPlugin *plugin)
 {
     bool anyChanged = false;
     struct ParamMsg p;
-    while (fromAudioQ.try_dequeue(p))
+    while (plugin->fromAudioQ.try_dequeue(p))
     {
 #ifdef DEBUG_PRINT
         fprintf(stderr, "PluginSyncAudioToMain fromAudioQ.try_dequeue: %d %f\n", p.paramIndex,
@@ -616,7 +612,7 @@ static const clap_plugin_state_t extensionState = {
             fprintf(stderr, "extensionState.load toAudioQ.try_enqueue: %d %f\n", p.paramIndex,
                     p.value);
 #endif
-            toAudioQ.try_enqueue(p);
+            plugin->toAudioQ.try_enqueue(p);
         }
         return success;
     },
@@ -628,25 +624,26 @@ static const clap_plugin_state_t extensionState = {
 constexpr auto bred = ce::colors::red.opacity(0.1);
 constexpr auto bblue = ce::colors::light_blue.opacity(0.1);
 
-auto vibrato_controls(double *mainParameters)
+auto vibrato_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
     onOff->value(mainParameters[P_VIBRATO]);
-    onOff->on_click = [mainParameters](bool down) {
-        mainParameters[P_VIBRATO] = (float)down;
-        toAudioQ.try_enqueue({P_VIBRATO, (double)down});
+    onOff->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_VIBRATO] = (float)down;
+        plugin->toAudioQ.try_enqueue({P_VIBRATO, (double)down});
     };
-    guiUpdaters[P_VIBRATO] = [onOff](double v) { onOff->value((bool)v); };
+    plugin->guiUpdaters[P_VIBRATO] = [onOff](double v) { onOff->value((bool)v); };
 
     auto type = ce::share(ce::dial(ce::basic_knob<50>()));
     float scale = 5.99f;
     type->value(mainParameters[P_VIBRATO_TYPE] / scale);
-    type->on_change = [mainParameters, scale](double val) {
+    type->on_change = [plugin, scale](double val) {
         double v = scale * val;
-        mainParameters[P_VIBRATO_TYPE] = v;
-        toAudioQ.try_enqueue({P_VIBRATO_TYPE, v});
+        plugin->mainParameters[P_VIBRATO_TYPE] = v;
+        plugin->toAudioQ.try_enqueue({P_VIBRATO_TYPE, v});
     };
-    guiUpdaters[P_VIBRATO_TYPE] = [type, scale](double v) { type->value(v / scale); };
+    plugin->guiUpdaters[P_VIBRATO_TYPE] = [type, scale](double v) { type->value(v / scale); };
 
     return ce::pane("Vibrato",
                     ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, ce::hold(onOff))),
@@ -654,39 +651,40 @@ auto vibrato_controls(double *mainParameters)
                                                          ce::label{"Type"}))));
 }
 
-auto percussion_controls(double *mainParameters)
+auto percussion_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
     onOff->value(mainParameters[P_PERCUSSION]);
-    onOff->on_click = [mainParameters](bool down) {
-        mainParameters[P_PERCUSSION] = float(down);
-        toAudioQ.try_enqueue({P_PERCUSSION, (double)down});
+    onOff->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_PERCUSSION] = float(down);
+        plugin->toAudioQ.try_enqueue({P_PERCUSSION, (double)down});
     };
-    guiUpdaters[P_PERCUSSION] = [onOff](double v) { onOff->value((bool)v); };
+    plugin->guiUpdaters[P_PERCUSSION] = [onOff](double v) { onOff->value((bool)v); };
 
     auto volume = ce::share(ce::toggle_button("Volume", 1.0, bblue));
     volume->value(mainParameters[P_PERCUSSION_VOLUME]);
-    volume->on_click = [mainParameters](bool down) {
-        mainParameters[P_PERCUSSION_VOLUME] = (float)down;
-        toAudioQ.try_enqueue({P_PERCUSSION_VOLUME, (double)down});
+    volume->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_PERCUSSION_VOLUME] = (float)down;
+        plugin->toAudioQ.try_enqueue({P_PERCUSSION_VOLUME, (double)down});
     };
-    guiUpdaters[P_PERCUSSION_VOLUME] = [volume](double v) { volume->value((bool)v); };
+    plugin->guiUpdaters[P_PERCUSSION_VOLUME] = [volume](double v) { volume->value((bool)v); };
 
     auto decay = ce::share(ce::toggle_button("Decay", 1.0, bblue));
     decay->value(mainParameters[P_PERCUSSION_DECAY]);
-    decay->on_click = [mainParameters](bool down) {
-        mainParameters[P_PERCUSSION_DECAY] = (float)down;
-        toAudioQ.try_enqueue({P_PERCUSSION_DECAY, (double)down});
+    decay->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_PERCUSSION_DECAY] = (float)down;
+        plugin->toAudioQ.try_enqueue({P_PERCUSSION_DECAY, (double)down});
     };
-    guiUpdaters[P_PERCUSSION_DECAY] = [decay](double v) { decay->value((bool)v); };
+    plugin->guiUpdaters[P_PERCUSSION_DECAY] = [decay](double v) { decay->value((bool)v); };
 
     auto harmonic = ce::share(ce::toggle_button("Harmonic", 1.0, bblue));
     harmonic->value(mainParameters[P_PERCUSSION_HARMONIC]);
-    harmonic->on_click = [mainParameters](bool down) {
-        mainParameters[P_PERCUSSION_HARMONIC] = (float)down;
-        toAudioQ.try_enqueue({P_PERCUSSION_HARMONIC, (double)down});
+    harmonic->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_PERCUSSION_HARMONIC] = (float)down;
+        plugin->toAudioQ.try_enqueue({P_PERCUSSION_HARMONIC, (double)down});
     };
-    guiUpdaters[P_PERCUSSION_HARMONIC] = [harmonic](double v) { harmonic->value((bool)v); };
+    plugin->guiUpdaters[P_PERCUSSION_HARMONIC] = [harmonic](double v) { harmonic->value((bool)v); };
 
     float m = 2.0;
     return ce::pane(
@@ -738,8 +736,9 @@ std::string ratioString(double *mainParameters, int i)
     return std::to_string(top) + "/" + std::to_string(bottom);
 }
 
-auto drawbar_controls(double *mainParameters)
+auto drawbar_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     auto track = ce::basic_track<5, true>();
     auto marks = ce::slider_marks_lin<40, 8>(track);
     float scale = 8.0f;
@@ -747,12 +746,12 @@ auto drawbar_controls(double *mainParameters)
     auto makeSlider = [&](uint32_t i) {
         auto s = ce::share(ce::slider(ce::basic_thumb<25>(), marks));
         s->value(mainParameters[i] / scale);
-        s->on_change = [mainParameters, scale, i](double val) {
+        s->on_change = [plugin, scale, i](double val) {
             double v = scale * val;
-            mainParameters[i] = v;
-            toAudioQ.try_enqueue({i, v});
+            plugin->mainParameters[i] = v;
+            plugin->toAudioQ.try_enqueue({i, v});
         };
-        guiUpdaters[i] = [s, scale](double v) { s->value(v / scale); };
+        plugin->guiUpdaters[i] = [s, scale](double v) { s->value(v / scale); };
         return s;
     };
     auto slider0 = makeSlider(0);
@@ -766,12 +765,12 @@ auto drawbar_controls(double *mainParameters)
     auto slider8 = makeSlider(8);
     float m = 5.0;
 
-    auto setRatioUpdater = [mainParameters](uint32_t i, auto box) {
+    auto setRatioUpdater = [plugin, mainParameters](uint32_t i, auto box) {
         auto updater = [box, mainParameters, i](double) {
             box->set_text(ratioString(mainParameters, i));
         };
-        guiUpdaters[P_RATIO_TOP_MIN + i] = updater;
-        guiUpdaters[P_RATIO_BOTTOM_MIN + i] = updater;
+        plugin->guiUpdaters[P_RATIO_TOP_MIN + i] = updater;
+        plugin->guiUpdaters[P_RATIO_BOTTOM_MIN + i] = updater;
     };
 
     auto ratio0 = ce::input_box(ratioString(mainParameters, 0));
@@ -817,24 +816,25 @@ auto drawbar_controls(double *mainParameters)
                       ce::hmargin(m, ce::vtile(ce::hold(slider8), ratio8.first)))));
 }
 
-auto overdrive_controls(double *mainParameters)
+auto overdrive_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     auto onOff = ce::share(ce::toggle_button("On/off", 1.0, bred));
     onOff->value(mainParameters[P_OVERDRIVE]);
-    onOff->on_click = [mainParameters](bool down) {
-        mainParameters[P_OVERDRIVE] = float(down);
-        toAudioQ.try_enqueue({P_OVERDRIVE, (double)down});
+    onOff->on_click = [plugin](bool down) {
+        plugin->mainParameters[P_OVERDRIVE] = float(down);
+        plugin->toAudioQ.try_enqueue({P_OVERDRIVE, (double)down});
     };
-    guiUpdaters[P_OVERDRIVE] = [onOff](double v) { onOff->value((bool)v); };
+    plugin->guiUpdaters[P_OVERDRIVE] = [onOff](double v) { onOff->value((bool)v); };
 
     // auto character = ce::dial(ce::radial_marks<20>(ce::basic_knob<25>()));
     auto character = ce::share(ce::dial(ce::basic_knob<50>()));
     character->value(mainParameters[P_CHARACTER]);
-    character->on_change = [mainParameters](double val) {
-        mainParameters[P_CHARACTER] = val;
-        toAudioQ.try_enqueue({P_CHARACTER, val});
+    character->on_change = [plugin](double val) {
+        plugin->mainParameters[P_CHARACTER] = val;
+        plugin->toAudioQ.try_enqueue({P_CHARACTER, val});
     };
-    guiUpdaters[P_CHARACTER] = [character](double v) { character->value(v); };
+    plugin->guiUpdaters[P_CHARACTER] = [character](double v) { character->value(v); };
 
     return ce::pane("Overdrive",
                     ce::htile(ce::align_center_middle(ce::fixed_size({50, 50}, ce::hold(onOff))),
@@ -842,41 +842,43 @@ auto overdrive_controls(double *mainParameters)
                                                          ce::label{"Character"}))));
 }
 
-auto reverb_controls(double *mainParameters)
+auto reverb_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     auto wetDry = ce::share(ce::dial(ce::basic_knob<50>()));
     wetDry->value(mainParameters[P_REVERB]);
-    wetDry->on_change = [mainParameters](double val) {
-        mainParameters[P_REVERB] = val;
-        toAudioQ.try_enqueue({P_REVERB, val});
+    wetDry->on_change = [plugin](double val) {
+        plugin->mainParameters[P_REVERB] = val;
+        plugin->toAudioQ.try_enqueue({P_REVERB, val});
     };
-    guiUpdaters[P_REVERB] = [wetDry](double v) { wetDry->value(v); };
+    plugin->guiUpdaters[P_REVERB] = [wetDry](double v) { wetDry->value(v); };
     return ce::pane("Reverb", ce::align_center(ce::margin(
                                   {5, 5, 5, 5}, ce::vtile(ce::margin({5, 5, 5, 5}, ce::hold(wetDry)),
                                                           ce::label{"Wet/dry"}))));
 }
 
-auto leslie_controls(double *mainParameters)
+auto leslie_controls(MyPlugin *plugin)
 {
+    double *mainParameters = plugin->mainParameters;
     float scale = 2.99f;
 
     auto drum = ce::share(ce::dial(ce::basic_knob<50>()));
     drum->value(mainParameters[P_DRUM] / scale);
-    drum->on_change = [scale, mainParameters](double val) {
+    drum->on_change = [scale, plugin](double val) {
         double v = scale * val;
-        mainParameters[P_DRUM] = v;
-        toAudioQ.try_enqueue({P_DRUM, v});
+        plugin->mainParameters[P_DRUM] = v;
+        plugin->toAudioQ.try_enqueue({P_DRUM, v});
     };
-    guiUpdaters[P_DRUM] = [drum, scale](double v) { drum->value(v / scale); };
+    plugin->guiUpdaters[P_DRUM] = [drum, scale](double v) { drum->value(v / scale); };
 
     auto horn = ce::share(ce::dial(ce::basic_knob<50>()));
     horn->value(mainParameters[P_HORN] / scale);
-    horn->on_change = [scale, mainParameters](double val) {
+    horn->on_change = [scale, plugin](double val) {
         double v = scale * val;
-        mainParameters[P_HORN] = v;
-        toAudioQ.try_enqueue({P_HORN, v});
+        plugin->mainParameters[P_HORN] = v;
+        plugin->toAudioQ.try_enqueue({P_HORN, v});
     };
-    guiUpdaters[P_HORN] = [horn, scale](double v) { horn->value(v / scale); };
+    plugin->guiUpdaters[P_HORN] = [horn, scale](double v) { horn->value(v / scale); };
 
     return ce::pane(
         "Leslie",
@@ -891,12 +893,12 @@ void GUISetup(MyPlugin *plugin)
     float m = 5.0;
     plugin->gui->view->content(ce::align_center_middle(ce::pane(
         ce::label("tuneBfree").font_size(18),
-        ce::htile(ce::margin({m, m, m, m}, drawbar_controls(plugin->mainParameters)),
-                  ce::vtile(ce::margin({m, m, m, m}, percussion_controls(plugin->mainParameters)),
-                            ce::margin({m, m, m, m}, vibrato_controls(plugin->mainParameters)),
-                            ce::margin({m, m, m, m}, overdrive_controls(plugin->mainParameters)),
-                            ce::margin({m, m, m, m}, reverb_controls(plugin->mainParameters)),
-                            ce::margin({m, m, m, m}, leslie_controls(plugin->mainParameters)))))));
+        ce::htile(ce::margin({m, m, m, m}, drawbar_controls(plugin)),
+                  ce::vtile(ce::margin({m, m, m, m}, percussion_controls(plugin)),
+                            ce::margin({m, m, m, m}, vibrato_controls(plugin)),
+                            ce::margin({m, m, m, m}, overdrive_controls(plugin)),
+                            ce::margin({m, m, m, m}, reverb_controls(plugin)),
+                            ce::margin({m, m, m, m}, leslie_controls(plugin)))))));
 
 #if defined(_WIN32)
     plugin->gui->window = plugin->gui->view->host();
@@ -962,7 +964,7 @@ static const clap_plugin_gui_t extensionGUI = {
             plugin->hostTimerSupport = nullptr;
             for (uint32_t i = 0; i < P_COUNT; i++)
             {
-                guiUpdaters[i] = nullptr;
+                plugin->guiUpdaters[i] = nullptr;
             }
             GUIDestroy(plugin);
         },
@@ -1073,13 +1075,13 @@ static const clap_plugin_timer_support_t extensionTimerSupport = {
                 return;
             struct ParamMsg p;
             bool anyChanged = false;
-            while (fromAudioQ.try_dequeue(p))
+            while (plugin->fromAudioQ.try_dequeue(p))
             {
                 if (p.paramIndex < P_COUNT)
                 {
                     plugin->mainParameters[p.paramIndex] = p.value;
-                    if (guiUpdaters[p.paramIndex])
-                        guiUpdaters[p.paramIndex](p.value);
+                    if (plugin->guiUpdaters[p.paramIndex])
+                        plugin->guiUpdaters[p.paramIndex](p.value);
                     anyChanged = true;
                 }
             }
@@ -1133,7 +1135,7 @@ static const clap_plugin_t pluginClass = {
             {
                 MTS_DeregisterClient(plugin->client);
             }
-            free(plugin);
+            delete plugin;
         },
 
     .activate = [](const clap_plugin *_plugin, double sampleRate, uint32_t minimumFramesCount,
@@ -1310,7 +1312,7 @@ static const clap_plugin_factory_t pluginFactory = {
             return nullptr;
         }
 
-        MyPlugin *plugin = (MyPlugin *)calloc(1, sizeof(MyPlugin));
+        MyPlugin *plugin = new MyPlugin();
         plugin->host = host;
         plugin->plugin = pluginClass;
         plugin->plugin.plugin_data = plugin;
