@@ -186,7 +186,7 @@ ifeq ($(LV2AVAIL)$(HAVE_UI)$(HAVE_IDLE), yesyesyes)
       # The libs on the two lines below are used by freetype
       UILIBS+=$(STATICLIBS)/libpng.a $(STATICLIBS)/libbrotlidec.a $(STATICLIBS)/libbrotlicommon.a $(STATICLIBS)/libharfbuzz.a
       UILIBS+=$(STATICLIBS)/libbz2.a $(STATICLIBS)/libgraphite2.a $(STATICLIBS)/librpcrt4.a $(STATICLIBS)/libz.a
-      UILIBS+=-lws2_32 -lwinmm -lopengl32 -lglu32 -lgdi32 -lcomdlg32 -lpthread
+      UILIBS+=-lws2_32 -lwinmm -lopengl32 -lglu32 -lgdi32 -lcomdlg32 -lpthread -ldwrite
     else
       UIDEPS+=$(PUGL_DIR)/pugl_x11.c
       override CFLAGS+=`pkg-config --cflags glu`

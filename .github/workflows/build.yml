@@ -159,10 +159,9 @@ jobs:
           cmake -B build
           cmake --build build --config Release
           cp build/Release/tuneBfree.clap ../$OUTPUT_DIR
-          rm -r build
-          cmake -B build -D CLAP_GUI=TRUE
-          cmake --build build --config Release
-          cp build/Release/tuneBfree.clap ../$OUTPUT_DIR/tuneBfreeGUI.clap
+          cmake -B build_gui -D CLAP_GUI=TRUE
+          cmake --build build_gui --config Release
+          cp build_gui/Release/tuneBfree.clap ../$OUTPUT_DIR/tuneBfreeGUI.clap
       - uses: actions/upload-artifact@v4
         with:
             name: ${{ env.output_dir }}
